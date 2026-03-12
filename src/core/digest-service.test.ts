@@ -22,14 +22,24 @@ const DEFAULT_DIGEST_CONFIG = { intervalMin: 30, debounceMin: 1 };
 describe('DigestService', () => {
   let sendToAgent: ReturnType<typeof vi.fn>;
   let service: DigestService;
+  let tempDir: string;
+  const origDataDir = process.env.DATA_DIR;
 
   beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'digest-test-'));
+    process.env.DATA_DIR = tempDir;
     sendToAgent = vi.fn().mockResolvedValue('ok');
     service = new DigestService(sendToAgent);
   });
 
   afterEach(() => {
     service.stop();
+    if (origDataDir === undefined) {
+      delete process.env.DATA_DIR;
+    } else {
+      process.env.DATA_DIR = origDataDir;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   // -----------------------------------------------------------------------
@@ -73,10 +83,10 @@ describe('DigestService', () => {
       expect(context).toMatchObject({
         type: 'digest',
         outputMode: 'silent',
-        convKey: 'discord:123456',
         sourceChannel: 'discord',
         sourceChatId: '123456',
       });
+      expect(context.convKey).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
@@ -412,24 +422,6 @@ describe('DigestService', () => {
   // 20. Persistence: buffers survive restart
   // -----------------------------------------------------------------------
   describe('persistence', () => {
-    let tempDir: string;
-    let origDataDir: string | undefined;
-
-    beforeEach(() => {
-      tempDir = mkdtempSync(join(tmpdir(), 'digest-persist-'));
-      origDataDir = process.env.DATA_DIR;
-      process.env.DATA_DIR = tempDir;
-    });
-
-    afterEach(() => {
-      if (origDataDir === undefined) {
-        delete process.env.DATA_DIR;
-      } else {
-        process.env.DATA_DIR = origDataDir;
-      }
-      rmSync(tempDir, { recursive: true, force: true });
-    });
-
     it('persists buffers to disk and restores on start()', async () => {
       vi.useFakeTimers();
       try {

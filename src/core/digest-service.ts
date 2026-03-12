@@ -245,14 +245,11 @@ export class DigestService {
       time: new Date(),
     });
 
-    const convKey = `${meta.adapter}:${meta.chatId}`;
-
     const context: TriggerContext = {
       type: 'digest',
       outputMode: 'silent',
       sourceChannel: meta.adapter,
       sourceChatId: meta.chatId,
-      convKey,
     };
 
     log.info(

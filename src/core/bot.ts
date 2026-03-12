@@ -1922,7 +1922,10 @@ export class LettaBot implements AgentSession {
     context?: TriggerContext
   ): Promise<string> {
     const isSilent = context?.outputMode === 'silent';
-    const convKey = context?.convKey ?? this.resolveHeartbeatConversationKey();
+    const convKey = context?.convKey
+      ?? (context?.sourceChannel
+        ? this.resolveConversationKey(context.sourceChannel, context.sourceChatId)
+        : this.resolveHeartbeatConversationKey());
     const triggerType = context?.type ?? 'heartbeat';
     const acquired = await this.acquireLock(convKey);
     this.activeBackgroundTriggerByKey.set(convKey, triggerType);
