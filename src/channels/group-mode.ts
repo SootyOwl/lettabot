@@ -2,7 +2,7 @@
  * Shared group mode helpers across channel adapters.
  */
 
-export type GroupMode = 'open' | 'listen' | 'mention-only' | 'disabled';
+export type GroupMode = 'open' | 'listen' | 'mention-only' | 'digest' | 'disabled';
 
 export interface GroupModeConfig {
   mode?: GroupMode;
@@ -18,6 +18,10 @@ export interface GroupModeConfig {
   threadMode?: 'any' | 'thread-only';
   /** Discord only: when true, @mentions in parent channels auto-create a thread. */
   autoCreateThreadOnMention?: boolean;
+  /** Digest mode: interval in minutes between digest notifications (default: 30) */
+  digestIntervalMin?: number;
+  /** Digest mode: quiet period in minutes before flushing (default: 1) */
+  digestDebounceMin?: number;
   /**
    * @deprecated Use mode: "mention-only" (true) or "open" (false).
    */
@@ -28,7 +32,7 @@ export type GroupsConfig = Record<string, GroupModeConfig>;
 
 function coerceMode(config?: GroupModeConfig): GroupMode | undefined {
   if (!config) return undefined;
-  if (config.mode === 'open' || config.mode === 'listen' || config.mode === 'mention-only' || config.mode === 'disabled') {
+  if (config.mode === 'open' || config.mode === 'listen' || config.mode === 'mention-only' || config.mode === 'digest' || config.mode === 'disabled') {
     return config.mode;
   }
   if (typeof config.requireMention === 'boolean') {
@@ -272,4 +276,45 @@ export function checkDailyLimit(
 export function resetDailyLimitCounters(): void {
   counters.clear();
   lastEvictionDate = '';
+}
+
+export interface DigestConfig {
+  intervalMin: number;
+  debounceMin: number;
+}
+
+/**
+ * Resolve digest mode configuration for a group/channel.
+ *
+ * Priority:
+ * 1. First matching key in provided order
+ * 2. Wildcard "*"
+ * 3. Defaults (intervalMin=30, debounceMin=1)
+ */
+export function resolveDigestConfig(
+  groups: GroupsConfig | undefined,
+  keys: string[],
+): DigestConfig {
+  const defaults: DigestConfig = { intervalMin: 30, debounceMin: 1 };
+  if (!groups) return defaults;
+
+  for (const key of keys) {
+    const config = groups[key];
+    if (config && (config.digestIntervalMin !== undefined || config.digestDebounceMin !== undefined)) {
+      return {
+        intervalMin: config.digestIntervalMin ?? defaults.intervalMin,
+        debounceMin: config.digestDebounceMin ?? defaults.debounceMin,
+      };
+    }
+  }
+
+  const wildcard = groups['*'];
+  if (wildcard && (wildcard.digestIntervalMin !== undefined || wildcard.digestDebounceMin !== undefined)) {
+    return {
+      intervalMin: wildcard.digestIntervalMin ?? defaults.intervalMin,
+      debounceMin: wildcard.digestDebounceMin ?? defaults.debounceMin,
+    };
+  }
+
+  return defaults;
 }

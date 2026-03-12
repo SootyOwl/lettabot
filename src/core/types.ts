@@ -14,7 +14,7 @@ export type OutputMode = 'responsive' | 'silent';
 /**
  * Trigger types
  */
-export type TriggerType = 'user_message' | 'heartbeat' | 'cron' | 'webhook' | 'feed';
+export type TriggerType = 'user_message' | 'heartbeat' | 'cron' | 'webhook' | 'feed' | 'digest';
 
 /**
  * Context about what triggered the agent
@@ -26,6 +26,8 @@ export interface TriggerContext {
   // Source info (for user messages)
   sourceChannel?: string;
   sourceChatId?: string;
+  /** Explicit conversation key override (used by digest mode to route to channel conversation) */
+  convKey?: string;
   sourceUserId?: string;
   
   // Cron/job info

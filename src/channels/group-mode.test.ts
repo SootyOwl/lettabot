@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { isGroupAllowed, isGroupUserAllowed, resolveGroupAllowedUsers, resolveGroupMode, resolveReceiveBotMessages, resolveDailyLimits, checkDailyLimit, resetDailyLimitCounters, type GroupsConfig } from './group-mode.js';
+import { isGroupAllowed, isGroupUserAllowed, resolveGroupAllowedUsers, resolveGroupMode, resolveReceiveBotMessages, resolveDailyLimits, checkDailyLimit, resetDailyLimitCounters, resolveDigestConfig, type GroupsConfig } from './group-mode.js';
 
 describe('group-mode helpers', () => {
   describe('isGroupAllowed', () => {
@@ -355,6 +355,46 @@ describe('group-mode helpers', () => {
       expect(checkDailyLimit('test:group', 'user-1', limits).allowed).toBe(true);  // count=2
       expect(checkDailyLimit('test:group', 'user-1', limits).allowed).toBe(false); // denied, count stays 2
       expect(checkDailyLimit('test:group', 'user-1', limits).allowed).toBe(false); // still denied, count stays 2
+    });
+  });
+
+  describe('digest mode', () => {
+    it('coerceMode recognizes digest', () => {
+      const groups: GroupsConfig = { 'group-1': { mode: 'digest' } };
+      expect(resolveGroupMode(groups, ['group-1'], 'open')).toBe('digest');
+    });
+
+    it('resolveDigestConfig returns defaults when no config', () => {
+      expect(resolveDigestConfig(undefined, ['group-1'])).toEqual({ intervalMin: 30, debounceMin: 1 });
+    });
+
+    it('resolveDigestConfig resolves from specific key', () => {
+      const groups: GroupsConfig = {
+        'group-1': { mode: 'digest', digestIntervalMin: 60, digestDebounceMin: 5 },
+      };
+      expect(resolveDigestConfig(groups, ['group-1'])).toEqual({ intervalMin: 60, debounceMin: 5 });
+    });
+
+    it('resolveDigestConfig falls back to wildcard', () => {
+      const groups: GroupsConfig = {
+        '*': { mode: 'digest', digestIntervalMin: 15, digestDebounceMin: 2 },
+      };
+      expect(resolveDigestConfig(groups, ['group-1'])).toEqual({ intervalMin: 15, debounceMin: 2 });
+    });
+
+    it('resolveDigestConfig merges specific key with defaults', () => {
+      const groups: GroupsConfig = {
+        'group-1': { mode: 'digest', digestIntervalMin: 45 },
+      };
+      expect(resolveDigestConfig(groups, ['group-1'])).toEqual({ intervalMin: 45, debounceMin: 1 });
+    });
+
+    it('resolveDigestConfig specific key takes priority over wildcard', () => {
+      const groups: GroupsConfig = {
+        '*': { mode: 'digest', digestIntervalMin: 15, digestDebounceMin: 2 },
+        'group-1': { mode: 'digest', digestIntervalMin: 90, digestDebounceMin: 10 },
+      };
+      expect(resolveDigestConfig(groups, ['group-1'])).toEqual({ intervalMin: 90, debounceMin: 10 });
     });
   });
 });

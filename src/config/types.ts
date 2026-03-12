@@ -297,7 +297,7 @@ export interface ProviderConfig {
   apiKey: string;
 }
 
-export type GroupMode = 'open' | 'listen' | 'mention-only' | 'disabled';
+export type GroupMode = 'open' | 'listen' | 'mention-only' | 'digest' | 'disabled';
 
 export interface GroupConfig {
   mode?: GroupMode;
@@ -313,6 +313,10 @@ export interface GroupConfig {
   threadMode?: 'any' | 'thread-only';
   /** Discord only: when true, @mentions in parent channels auto-create a thread. */
   autoCreateThreadOnMention?: boolean;
+  /** Digest mode: interval in minutes between digest notifications (default: 30) */
+  digestIntervalMin?: number;
+  /** Digest mode: quiet period in minutes before flushing (default: 1) */
+  digestDebounceMin?: number;
   /**
    * @deprecated Use mode: "mention-only" (true) or "open" (false).
    */
