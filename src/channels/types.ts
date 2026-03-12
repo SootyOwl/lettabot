@@ -29,6 +29,8 @@ export interface ChannelAdapter {
   sendFile?(file: OutboundFile): Promise<{ messageId: string }>;
   addReaction?(chatId: string, messageId: string, emoji: string): Promise<void>;
   getDmPolicy?(): string;
+  /** Read recent messages from a channel (used by digest mode's read_channel_messages tool) */
+  readMessages?(chatId: string, limit: number): Promise<InboundMessage[]>;
   getFormatterHints(): FormatterHints;
   
   // Event handlers (set by bot core)
