@@ -1,11 +1,33 @@
-import type { AnyAgentTool } from '@letta-ai/letta-code-sdk';
+import type { AnyAgentTool, AgentToolResult, AgentToolResultContent } from '@letta-ai/letta-code-sdk';
 import {
   jsonResult,
   readStringParam,
 } from '@letta-ai/letta-code-sdk';
 import type { ChannelAdapter } from '../channels/types.js';
-import type { ChannelId, InboundMessage } from '../core/types.js';
+import type { ChannelId, InboundMessage, InboundAttachment } from '../core/types.js';
 import { resolveGroupMode, type GroupsConfig } from '../channels/group-mode.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('ReadChannelMessages');
+
+const IMAGE_MIME_PREFIXES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+
+function isImageAttachment(a: InboundAttachment): boolean {
+  return a.kind === 'image' || IMAGE_MIME_PREFIXES.some(p => a.mimeType?.startsWith(p));
+}
+
+async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const buffer = await response.arrayBuffer();
+    const data = Buffer.from(buffer).toString('base64');
+    const mimeType = response.headers.get('content-type') || 'image/png';
+    return { data, mimeType };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Format an InboundMessage into a human-readable line matching the batch format:
@@ -104,14 +126,55 @@ export function createReadChannelMessagesTool(
 
       try {
         const messages = await adapter.readMessages(chatId, limit);
-        const formatted = messages.map(formatMessage).join('\n');
-        return jsonResult({
-          ok: true,
-          channel,
-          chatId,
-          count: messages.length,
-          messages: formatted,
-        });
+
+        // Collect all image URLs to fetch in parallel (cap at 10)
+        const imageSlots: Array<{ msgIndex: number; attIndex: number; url: string }> = [];
+        for (let mi = 0; mi < messages.length; mi++) {
+          const msg = messages[mi];
+          if (!msg.attachments) continue;
+          for (let ai = 0; ai < msg.attachments.length; ai++) {
+            const a = msg.attachments[ai];
+            if (isImageAttachment(a) && a.url && imageSlots.length < 10) {
+              imageSlots.push({ msgIndex: mi, attIndex: ai, url: a.url });
+            }
+          }
+        }
+
+        // Fetch all images in parallel
+        const fetched = await Promise.all(
+          imageSlots.map(async (slot) => {
+            const img = await fetchImageAsBase64(slot.url);
+            return { ...slot, img };
+          }),
+        );
+
+        // Index fetched images by msgIndex for fast lookup
+        const imagesByMsg = new Map<number, Array<{ attIndex: number; data: string; mimeType: string }>>();
+        for (const f of fetched) {
+          if (!f.img) continue;
+          let list = imagesByMsg.get(f.msgIndex);
+          if (!list) { list = []; imagesByMsg.set(f.msgIndex, list); }
+          list.push({ attIndex: f.attIndex, ...f.img });
+        }
+
+        // Build interleaved content: each message's text line, then its images
+        const content: AgentToolResultContent[] = [
+          { type: 'text', text: JSON.stringify({ ok: true, channel, chatId, count: messages.length }) },
+        ];
+
+        for (let mi = 0; mi < messages.length; mi++) {
+          content.push({ type: 'text', text: formatMessage(messages[mi]) });
+          const imgs = imagesByMsg.get(mi);
+          if (imgs) {
+            for (const img of imgs) {
+              const att = messages[mi].attachments![img.attIndex];
+              content.push({ type: 'text', text: `[Image: ${att.name || 'attachment'}]` });
+              content.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+            }
+          }
+        }
+
+        return { content };
       } catch (err) {
         const message =
           err instanceof Error ? err.message : 'Unknown error';

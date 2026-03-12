@@ -4,9 +4,12 @@ import type { ChannelAdapter } from '../channels/types.js';
 import type { InboundMessage } from '../core/types.js';
 import type { GroupsConfig } from '../channels/group-mode.js';
 
-function parseToolResult(result: { content: Array<{ text?: string }> }): any {
-  const text = result.content[0]?.text || '{}';
-  return JSON.parse(text);
+function parseToolResult(result: { content: Array<{ type?: string; text?: string }> }): any {
+  const meta = JSON.parse(result.content[0]?.text || '{}');
+  // Collect all text content blocks after the metadata as the full transcript
+  const textBlocks = result.content.slice(1).filter(c => c.type === 'text').map(c => c.text || '');
+  meta.messages = textBlocks.join('\n');
+  return meta;
 }
 
 function makeMockAdapter(messages: InboundMessage[] = []): ChannelAdapter {
