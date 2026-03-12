@@ -339,6 +339,145 @@ describe('DiscordAdapter command gating', () => {
     await adapter.stop();
   });
 
+  it('digest mode routes non-mention messages to digestService', async () => {
+    const digestService = { addMessage: vi.fn(), stop: vi.fn() };
+    const adapter = new DiscordAdapter({
+      token: 'token',
+      groups: {
+        'channel-1': { mode: 'digest' },
+      },
+      digestService: digestService as never,
+    });
+    const onMessage = vi.fn().mockResolvedValue(undefined);
+    adapter.onMessage = onMessage;
+
+    await adapter.start();
+    const client = discordMock.getLatestClient();
+    expect(client).toBeTruthy();
+
+    const message = makeMessage({
+      content: 'hello everyone',
+      isThread: false,
+      channelId: 'channel-1',
+    });
+
+    await client!.emit('messageCreate', message);
+
+    expect(digestService.addMessage).toHaveBeenCalledTimes(1);
+    expect(digestService.addMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: 'discord',
+        chatId: 'channel-1',
+        text: 'hello everyone',
+      }),
+      expect.any(Object),
+    );
+    expect(onMessage).not.toHaveBeenCalled();
+    await adapter.stop();
+  });
+
+  it('digest mode forwards @mentions immediately', async () => {
+    const digestService = { addMessage: vi.fn(), stop: vi.fn() };
+    const adapter = new DiscordAdapter({
+      token: 'token',
+      groups: {
+        'channel-1': { mode: 'digest' },
+      },
+      digestService: digestService as never,
+    });
+    const onMessage = vi.fn().mockResolvedValue(undefined);
+    adapter.onMessage = onMessage;
+
+    await adapter.start();
+    const client = discordMock.getLatestClient();
+    expect(client).toBeTruthy();
+
+    const message = makeMessage({
+      content: 'hey @bot help me',
+      isThread: false,
+      channelId: 'channel-1',
+    });
+    message.mentions = { has: () => true };
+
+    await client!.emit('messageCreate', message);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      chatId: 'channel-1',
+      text: 'hey @bot help me',
+    }));
+    expect(digestService.addMessage).not.toHaveBeenCalled();
+    await adapter.stop();
+  });
+
+  it('digest mode drops reactions', async () => {
+    const digestService = { addMessage: vi.fn(), stop: vi.fn() };
+    const adapter = new DiscordAdapter({
+      token: 'token',
+      groups: {
+        'channel-1': { mode: 'digest' },
+      },
+      digestService: digestService as never,
+    });
+    const onMessage = vi.fn().mockResolvedValue(undefined);
+    adapter.onMessage = onMessage;
+
+    await adapter.start();
+    const client = discordMock.getLatestClient();
+    expect(client).toBeTruthy();
+
+    const reaction = {
+      partial: false,
+      message: {
+        partial: false,
+        id: 'msg-1',
+        guildId: 'guild-1',
+        channel: {
+          id: 'channel-1',
+          isThread: () => false,
+          isTextBased: () => true,
+        },
+        content: 'original message',
+        author: { id: 'user-1', username: 'alice' },
+      },
+      emoji: { id: null, name: '👍', toString: () => '👍' },
+    };
+    const user = { id: 'user-2', bot: false };
+
+    await client!.emit('messageReactionAdd', reaction, user);
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(digestService.addMessage).not.toHaveBeenCalled();
+    await adapter.stop();
+  });
+
+  it('digest mode without digestService silently drops messages', async () => {
+    const adapter = new DiscordAdapter({
+      token: 'token',
+      groups: {
+        'channel-1': { mode: 'digest' },
+      },
+      // no digestService
+    });
+    const onMessage = vi.fn().mockResolvedValue(undefined);
+    adapter.onMessage = onMessage;
+
+    await adapter.start();
+    const client = discordMock.getLatestClient();
+    expect(client).toBeTruthy();
+
+    const message = makeMessage({
+      content: 'hello everyone',
+      isThread: false,
+      channelId: 'channel-1',
+    });
+
+    await client!.emit('messageCreate', message);
+
+    expect(onMessage).not.toHaveBeenCalled();
+    await adapter.stop();
+  });
+
   it('creates one thread when unknown slash commands fall through to agent handling', async () => {
     const adapter = new DiscordAdapter({
       token: 'token',

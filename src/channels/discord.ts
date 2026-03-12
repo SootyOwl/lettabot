@@ -14,7 +14,8 @@ import { resolveEmoji } from './shared/emoji.js';
 import { splitMessageText } from './shared/message-splitter.js';
 import { buildAttachmentPath, downloadToFile } from './attachments.js';
 import { HELP_TEXT } from '../core/commands.js';
-import { isGroupAllowed, isGroupUserAllowed, resolveGroupMode, resolveReceiveBotMessages, resolveDailyLimits, checkDailyLimit, type GroupModeConfig } from './group-mode.js';
+import { isGroupAllowed, isGroupUserAllowed, resolveGroupMode, resolveReceiveBotMessages, resolveDailyLimits, checkDailyLimit, resolveDigestConfig, type GroupModeConfig } from './group-mode.js';
+import type { DigestService } from '../core/digest-service.js';
 import { basename } from 'node:path';
 
 import { createLogger } from '../logger.js';
@@ -36,6 +37,7 @@ export interface DiscordConfig {
   groups?: Record<string, GroupModeConfig>;  // Per-guild/channel settings
   agentName?: string;       // For scoping daily limit counters in multi-agent mode
   ignoreBotReactions?: boolean;   // Ignore all bot reactions (default: true). Set false for multi-bot setups.
+  digestService?: DigestService;
 }
 
 export function shouldProcessDiscordBotMessage(params: {
@@ -114,6 +116,7 @@ export class DiscordAdapter implements ChannelAdapter {
   private running = false;
   private attachmentsDir?: string;
   private attachmentsMaxBytes?: number;
+  private digestService?: DigestService;
 
   onMessage?: (msg: InboundMessage) => Promise<void>;
   onCommand?: (command: string, chatId?: string, args?: string, forcePerChat?: boolean) => Promise<string | null>;
@@ -125,6 +128,7 @@ export class DiscordAdapter implements ChannelAdapter {
     };
     this.attachmentsDir = config.attachmentsDir;
     this.attachmentsMaxBytes = config.attachmentsMaxBytes;
+    this.digestService = config.digestService;
   }
 
   private async checkAccess(userId: string): Promise<'allowed' | 'blocked' | 'pairing'> {
@@ -388,6 +392,27 @@ Ask the bot owner to approve with:
           if (mode === 'mention-only' && !wasMentioned) {
             return; // Mention required but not mentioned -- silent drop
           }
+          if (mode === 'digest') {
+            if (wasMentioned) {
+              // @mentions bypass digest — forward immediately like open mode
+            } else if (this.digestService) {
+              const digestConfig = resolveDigestConfig(this.config.groups, keys);
+              this.digestService.addMessage({
+                channel: 'discord',
+                chatId: effectiveChatId,
+                userId,
+                userName: displayName,
+                text: content || '',
+                timestamp: message.createdAt,
+                isGroup,
+                groupName: effectiveGroupName,
+                serverId: message.guildId || undefined,
+              }, digestConfig);
+              return;
+            } else {
+              return; // digest mode but no service — drop
+            }
+          }
           isListeningMode = mode === 'listen' && !wasMentioned;
 
           // Daily rate limit check before side-effectful actions (like thread creation)
@@ -579,6 +604,48 @@ Ask the bot owner to approve with:
     }
   }
 
+  async readMessages(chatId: string, limit: number): Promise<import('../core/types.js').InboundMessage[]> {
+    if (!this.client) throw new Error('Discord not started');
+    const channel = await this.client.channels.fetch(chatId);
+    if (!channel || !channel.isTextBased() || !('messages' in channel)) {
+      throw new Error(`Discord channel not found or not text-based: ${chatId}`);
+    }
+
+    const textChannel = channel as {
+      messages: { fetch: (opts: { limit: number }) => Promise<Map<string, import('discord.js').Message>> };
+      name?: string;
+    };
+    const fetched = await textChannel.messages.fetch({ limit });
+
+    // Convert to InboundMessage[], sorted oldest-first
+    const results: import('../core/types.js').InboundMessage[] = [];
+    for (const msg of fetched.values()) {
+      results.push({
+        channel: 'discord',
+        chatId,
+        userId: msg.author?.id || 'unknown',
+        userName: msg.member?.displayName || msg.author?.globalName || msg.author?.username || 'unknown',
+        userHandle: msg.author?.username,
+        messageId: msg.id,
+        text: msg.content || '',
+        timestamp: msg.createdAt,
+        isGroup: !!msg.guildId,
+        attachments: Array.from((msg.attachments as Map<string, { id?: string; name?: string | null; contentType?: string | null; size?: number; url?: string }>).values()).map((a) => ({
+          id: a.id,
+          name: a.name || undefined,
+          mimeType: a.contentType || undefined,
+          size: a.size,
+          url: a.url,
+          kind: a.contentType?.startsWith('image/') ? 'image' as const : 'file' as const,
+        })),
+      });
+    }
+
+    // Discord fetches newest-first; reverse to oldest-first for reading order
+    results.reverse();
+    return results;
+  }
+
   getDmPolicy(): string {
     return this.config.dmPolicy || 'pairing';
   }
@@ -652,7 +719,7 @@ Ask the bot owner to approve with:
       }
 
       const mode = resolveGroupMode(this.config.groups, keys, 'open');
-      if (mode === 'disabled' || mode === 'mention-only') {
+      if (mode === 'disabled' || mode === 'mention-only' || mode === 'digest') {
         return;
       }
       isListeningMode = mode === 'listen';

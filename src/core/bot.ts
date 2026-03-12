@@ -318,7 +318,13 @@ export class LettaBot implements AgentSession {
     if (config.conversationOverrides?.length) {
       this.conversationOverrides = new Set(config.conversationOverrides.map((ch) => ch.toLowerCase()));
     }
-    this.sessionManager = new SessionManager(this.store, config, this.processingKeys, this.lastResultRunFingerprints);
+    this.sessionManager = new SessionManager(
+      this.store,
+      config,
+      this.processingKeys,
+      this.lastResultRunFingerprints,
+      (channel) => this.channels.get(channel),
+    );
     log.info(`LettaBot initialized. Agent ID: ${this.store.agentId || '(new)'}`);
   }
 
@@ -697,7 +703,12 @@ export class LettaBot implements AgentSession {
     this.channels.set(adapter.id, adapter);
     log.info(`Registered channel: ${adapter.name}`);
   }
-  
+
+  /** Get a registered channel adapter by ID (used by read_channel_messages tool) */
+  getChannel(channelId: string): ChannelAdapter | undefined {
+    return this.channels.get(channelId);
+  }
+
   setGroupBatcher(batcher: GroupBatcher, intervals: Map<string, number>, instantGroupIds?: Set<string>, listeningGroupIds?: Set<string>): void {
     this.groupBatcher = batcher;
     this.groupIntervals = intervals;
@@ -1911,7 +1922,7 @@ export class LettaBot implements AgentSession {
     context?: TriggerContext
   ): Promise<string> {
     const isSilent = context?.outputMode === 'silent';
-    const convKey = this.resolveHeartbeatConversationKey();
+    const convKey = context?.convKey ?? this.resolveHeartbeatConversationKey();
     const triggerType = context?.type ?? 'heartbeat';
     const acquired = await this.acquireLock(convKey);
     this.activeBackgroundTriggerByKey.set(convKey, triggerType);

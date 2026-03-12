@@ -7,6 +7,7 @@ import { TelegramAdapter } from './telegram.js';
 import type { ChannelAdapter } from './types.js';
 import { WhatsAppAdapter } from './whatsapp/index.js';
 import type { AgentConfig } from '../config/types.js';
+import type { DigestService } from '../core/digest-service.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('Config');
@@ -14,6 +15,7 @@ const log = createLogger('Config');
 type SharedFactoryOptions = {
   attachmentsDir: string;
   attachmentsMaxBytes: number;
+  digestService?: DigestService;
 };
 
 type SharedChannelBuilder = {
@@ -123,6 +125,7 @@ const SHARED_CHANNEL_BUILDERS: SharedChannelBuilder[] = [
         groups: discord.groups,
         agentName: agentConfig.name,
         ignoreBotReactions: discord.ignoreBotReactions,
+        digestService: options.digestService,
       });
     },
   },
@@ -137,9 +140,10 @@ export function createChannelsForAgent(
   agentConfig: AgentConfig,
   attachmentsDir: string,
   attachmentsMaxBytes: number,
+  digestService?: DigestService,
 ): ChannelAdapter[] {
   const adapters: ChannelAdapter[] = [];
-  const sharedOptions = { attachmentsDir, attachmentsMaxBytes };
+  const sharedOptions = { attachmentsDir, attachmentsMaxBytes, digestService };
 
   const hasTelegramBot = !!agentConfig.channels.telegram?.token;
   const hasTelegramMtproto = !!agentConfig.channels['telegram-mtproto']?.apiId;
@@ -206,8 +210,8 @@ export function createChannelsForAgent(
         appPassword: bsky.appPassword,
         serviceUrl: bsky.serviceUrl,
         appViewUrl: bsky.appViewUrl,
-        groups: bsky.groups,
-        lists: bsky.lists,
+        groups: bsky.groups as Record<string, { mode?: 'open' | 'listen' | 'mention-only' | 'disabled' }>,
+        lists: bsky.lists as Record<string, { mode?: 'open' | 'listen' | 'mention-only' | 'disabled' }>,
         notifications: bsky.notifications,
       }));
     }

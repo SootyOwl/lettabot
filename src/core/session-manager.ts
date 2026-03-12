@@ -15,6 +15,7 @@ import { installSkillsToAgent, prependSkillDirsToPath } from '../skills/loader.j
 import { loadMemoryBlocks } from './memory.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import { createManageTodoTool } from '../tools/todo.js';
+import { createReadChannelMessagesTool, type AdapterGetter, type GroupsGetter } from '../tools/read-channel-messages.js';
 import { syncTodosFromTool } from '../todo/store.js';
 import { recoverPendingApprovalsWithSdk } from './session-sdk-compat.js';
 import { createLogger } from '../logger.js';
@@ -81,6 +82,8 @@ export class SessionManager {
     config: BotConfig,
     processingKeys: ReadonlySet<string>,
     lastResultRunFingerprints: Map<string, string>,
+    private readonly getAdapter?: AdapterGetter,
+    private readonly getGroups?: GroupsGetter,
   ) {
     this.store = store;
     this.config = config;
@@ -183,7 +186,12 @@ export class SessionManager {
         ...(this.config.disallowedTools || []),
       ],
       cwd: this.config.workingDir,
-      tools: [createManageTodoTool(this.getTodoAgentKey())],
+      tools: [
+        createManageTodoTool(this.getTodoAgentKey()),
+        ...(this.getAdapter
+          ? [createReadChannelMessagesTool(this.getAdapter, this.getGroups ?? (() => undefined))]
+          : []),
+      ],
       // Memory filesystem (context repository): true -> --memfs, false -> --no-memfs, undefined -> leave unchanged
       ...(this.config.memfs !== undefined ? { memfs: this.config.memfs } : {}),
       ...(this.config.sleeptime ? { sleeptime: this.config.sleeptime } : {}),

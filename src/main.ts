@@ -72,6 +72,7 @@ import { printStartupBanner } from './core/banner.js';
 import { collectGroupBatchingConfig } from './core/group-batching-config.js';
 import { CronService } from './cron/service.js';
 import { HeartbeatService } from './cron/heartbeat.js';
+import { DigestService } from './core/digest-service.js';
 import { PollingService, parseGmailAccounts } from './polling/service.js';
 import { agentExists, findAgentByName, ensureNoToolApprovals } from './tools/letta-api.js';
 import { isVoiceMemoConfigured } from './skills/loader.js';
@@ -320,16 +321,18 @@ async function main() {
   const sessionInvalidators = new Map<string, (key?: string) => void>();
   const agentChannelMap = new Map<string, string[]>();
   const voiceMemoEnabled = isVoiceMemoConfigured();
-  const services: { 
-    cronServices: CronService[], 
-    heartbeatServices: HeartbeatService[], 
-    pollingServices: PollingService[], 
-    groupBatchers: GroupBatcher[] 
+  const services: {
+    cronServices: CronService[],
+    heartbeatServices: HeartbeatService[],
+    pollingServices: PollingService[],
+    groupBatchers: GroupBatcher[],
+    digestServices: DigestService[],
   } = {
     cronServices: [],
     heartbeatServices: [],
     pollingServices: [],
     groupBatchers: [],
+    digestServices: [],
   };
   
   for (const agentConfig of agents) {
@@ -466,8 +469,13 @@ async function main() {
       });
     }
 
+    // Digest service for digest-mode channels
+    const digestService = new DigestService((text, ctx) => bot.sendToAgent(text, ctx));
+    digestService.start();
+    services.digestServices.push(digestService);
+
     // Create and register channels
-    const adapters = createChannelsForAgent(agentConfig, attachmentsDir, globalConfig.attachmentsMaxBytes);
+    const adapters = createChannelsForAgent(agentConfig, attachmentsDir, globalConfig.attachmentsMaxBytes, digestService);
     for (const adapter of adapters) {
       bot.registerChannel(adapter);
     }
@@ -616,6 +624,7 @@ async function main() {
     services.heartbeatServices.forEach(h => h.stop());
     services.cronServices.forEach(c => c.stop());
     services.pollingServices.forEach(p => p.stop());
+    services.digestServices.forEach(d => d.stop());
     await gateway.stop();
     apiServer.close();
     process.exit(0);
