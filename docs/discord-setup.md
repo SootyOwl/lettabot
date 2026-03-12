@@ -144,11 +144,12 @@ By default, the bot processes and responds to all messages in server channels (`
 
 ### Group Modes
 
-Three modes are available:
+Five modes are available:
 
 - **`open`** -- Bot responds to all messages in the channel (default)
 - **`listen`** -- Bot processes all messages for context/memory, but only responds when @mentioned
 - **`mention-only`** -- Bot completely ignores messages unless @mentioned (cheapest option -- messages are dropped at the adapter level before reaching the agent)
+- **`digest`** -- Bot accumulates lightweight activity metadata (who sent how many messages) and periodically sends a summary to the agent. The agent can then decide whether to read the full conversation via `read_channel_messages` and respond. @mentions bypass the digest and are forwarded immediately. Best for active channels where you want awareness without per-message cost.
 - **`disabled`** -- Bot drops all messages in the channel unconditionally, even if @mentioned
 
 ### Configuring group modes
@@ -216,6 +217,34 @@ Required Discord permissions for auto-create:
 - `Send Messages`
 - `Create Public Threads` (or relevant thread creation permission for your channel type)
 - `Send Messages in Threads`
+
+### Digest mode
+
+Digest mode is ideal for active channels where the agent should stay aware of activity without processing every message through the LLM. Instead of forwarding each message, the bot accumulates per-user message counts and periodically sends a lightweight summary to the agent.
+
+```yaml
+channels:
+  discord:
+    token: "your-bot-token"
+    groups:
+      "*": { mode: mention-only }
+      "ACTIVE_CHANNEL_ID":
+        mode: digest
+        digestIntervalMin: 30   # Minutes between digest notifications (default: 30)
+        digestDebounceMin: 1    # Quiet period before flushing (default: 1)
+```
+
+How it works:
+
+1. Non-mention messages are accumulated in an in-memory buffer (no message content stored, only user counts)
+2. After `digestIntervalMin` minutes, the bot checks for a quiet period of `digestDebounceMin` minutes before flushing
+3. The agent receives a silent notification listing who sent how many messages
+4. The agent can call `read_channel_messages` to read the actual conversation and decide whether to respond
+5. @mentions bypass the digest entirely and are forwarded to the agent immediately
+
+The debounce prevents sending a digest mid-conversation. If activity never pauses, a cap at 2x the interval forces a flush to prevent unbounded buffering.
+
+Digest buffers are in-memory only -- they are lost on restart, but messages remain on Discord and are retrievable via `read_channel_messages`.
 
 ### Per-group user filtering
 
