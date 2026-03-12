@@ -10,9 +10,13 @@
  * have zero overhead.
  */
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import crypto from 'node:crypto';
 import { buildDigestPrompt } from './prompts.js';
 import type { InboundMessage, TriggerContext, ChannelId } from './types.js';
 import { createLogger } from '../logger.js';
+import { getDataDir } from '../utils/paths.js';
 
 const log = createLogger('Digest');
 
@@ -44,6 +48,30 @@ export interface DigestBuffer {
 export type SendToAgentFn = (text: string, context?: TriggerContext) => Promise<string>;
 
 // ---------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------
+
+const PERSIST_FILENAME = 'digest-buffers.json';
+const SAVE_DEBOUNCE_MS = 5_000; // debounce disk writes to at most every 5s
+
+/** Serializable form of DigestBuffer (Dates become ISO strings) */
+interface PersistedBuffer {
+  messages: Array<{ userId: string; userName: string; timestamp: string }>;
+  config: { intervalMin: number; debounceMin: number };
+  channelMeta: { adapter: string; chatId: string; channelName?: string };
+  timerStartedAt: number;
+}
+
+interface PersistedState {
+  version: 1;
+  buffers: Record<string, PersistedBuffer>;
+}
+
+function getPersistPath(): string {
+  return resolve(getDataDir(), PERSIST_FILENAME);
+}
+
+// ---------------------------------------------------------------------------
 // DigestService
 // ---------------------------------------------------------------------------
 
@@ -52,6 +80,8 @@ export class DigestService {
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly sendToAgent: SendToAgentFn;
   private stopped = false;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private savePending = false;
 
   constructor(sendToAgent: SendToAgentFn) {
     this.sendToAgent = sendToAgent;
@@ -98,10 +128,13 @@ export class DigestService {
       buffer.timerStartedAt = Date.now();
       this.scheduleFlush(key, buffer.config.intervalMin * 60_000);
     }
+
+    this.scheduleSave();
   }
 
   start(): void {
     this.stopped = false;
+    this.restoreFromDisk();
     log.info('DigestService started');
   }
 
@@ -110,6 +143,14 @@ export class DigestService {
     for (const [key, timer] of this.timers) {
       clearTimeout(timer);
       this.timers.delete(key);
+    }
+    // Flush pending save immediately
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.savePending) {
+      this.saveToDiskSync();
     }
     log.info('DigestService stopped');
   }
@@ -179,6 +220,7 @@ export class DigestService {
     const meta = buffer.channelMeta;
     const intervalMin = buffer.config.intervalMin;
     this.buffers.delete(key);
+    this.scheduleSave();
 
     // Aggregate per-user counts
     const userCounts = new Map<string, { name: string; count: number }>();
@@ -221,6 +263,110 @@ export class DigestService {
       await this.sendToAgent(prompt, context);
     } catch (err) {
       log.error(`Failed to send digest for ${key}:`, err);
+    }
+  }
+
+  // =========================================================================
+  // Persistence
+  // =========================================================================
+
+  /** Schedule a debounced save to disk */
+  private scheduleSave(): void {
+    this.savePending = true;
+    if (this.saveTimer) return; // already scheduled
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.savePending = false;
+      this.saveToDiskSync();
+    }, SAVE_DEBOUNCE_MS);
+    if (this.saveTimer.unref) this.saveTimer.unref();
+  }
+
+  /** Synchronously write current buffers to disk (atomic via tmp+rename) */
+  private saveToDiskSync(): void {
+    const persistPath = getPersistPath();
+    try {
+      const state: PersistedState = { version: 1, buffers: {} };
+      for (const [key, buf] of this.buffers) {
+        if (buf.messages.length === 0) continue;
+        state.buffers[key] = {
+          messages: buf.messages.map(m => ({
+            userId: m.userId,
+            userName: m.userName,
+            timestamp: m.timestamp.toISOString(),
+          })),
+          config: buf.config,
+          channelMeta: buf.channelMeta,
+          timerStartedAt: buf.timerStartedAt,
+        };
+      }
+
+      if (Object.keys(state.buffers).length === 0) {
+        // Nothing to persist — remove stale file if it exists
+        try { unlinkSync(persistPath); } catch { /* ignore */ }
+        return;
+      }
+
+      mkdirSync(dirname(persistPath), { recursive: true });
+      const tmp = `${persistPath}.${crypto.randomUUID()}.tmp`;
+      writeFileSync(tmp, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+      renameSync(tmp, persistPath);
+    } catch (err) {
+      log.error('Failed to persist digest buffers:', err);
+    }
+  }
+
+  /** Restore buffers from disk and restart timers */
+  private restoreFromDisk(): void {
+    const persistPath = getPersistPath();
+    if (!existsSync(persistPath)) return;
+
+    try {
+      const raw = readFileSync(persistPath, 'utf-8');
+      const state = JSON.parse(raw) as PersistedState;
+      if (state.version !== 1 || !state.buffers) return;
+
+      let restoredCount = 0;
+      const now = Date.now();
+
+      for (const [key, pBuf] of Object.entries(state.buffers)) {
+        if (!pBuf.messages.length) continue;
+
+        const buffer: DigestBuffer = {
+          messages: pBuf.messages.map(m => ({
+            userId: m.userId,
+            userName: m.userName,
+            timestamp: new Date(m.timestamp),
+          })),
+          config: pBuf.config,
+          channelMeta: {
+            adapter: pBuf.channelMeta.adapter as ChannelId,
+            chatId: pBuf.channelMeta.chatId,
+            channelName: pBuf.channelMeta.channelName,
+          },
+          timerStartedAt: pBuf.timerStartedAt,
+        };
+
+        this.buffers.set(key, buffer);
+
+        // Figure out how much time remains on the interval
+        const intervalMs = buffer.config.intervalMin * 60_000;
+        const elapsed = now - buffer.timerStartedAt;
+        const remaining = Math.max(0, intervalMs - elapsed);
+
+        // If interval already passed, flush soon (1s grace for startup)
+        this.scheduleFlush(key, remaining > 0 ? remaining : 1_000);
+        restoredCount++;
+      }
+
+      if (restoredCount > 0) {
+        log.info(`Restored ${restoredCount} digest buffer(s) from disk`);
+      }
+
+      // Clean up the persist file now that we've loaded it
+      try { unlinkSync(persistPath); } catch { /* ignore */ }
+    } catch (err) {
+      log.error('Failed to restore digest buffers from disk:', err);
     }
   }
 

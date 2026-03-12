@@ -7,10 +7,10 @@
  *
  * <actions> blocks can appear anywhere in the response:
  *
+ *   Great idea!
  *   <actions>
  *     <react emoji="thumbsup" />
  *   </actions>
- *   Great idea!
  *
  *   → cleanText: "Great idea!"
  *   → directives: [{ type: 'react', emoji: 'thumbsup' }]
@@ -176,7 +176,7 @@ export function parseDirectives(text: string): ParseResult {
     return '';
   }).trim();
 
-  return { cleanText, directives };
+  return { cleanText: cleanText.trim(), directives };
 }
 
 /**

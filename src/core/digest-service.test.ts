@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { DigestService } from './digest-service.js';
 import type { InboundMessage } from './types.js';
 
@@ -406,7 +409,118 @@ describe('DigestService', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 20. onTimerFire error is caught by scheduleFlush catch handler
+  // 20. Persistence: buffers survive restart
+  // -----------------------------------------------------------------------
+  describe('persistence', () => {
+    let tempDir: string;
+    let origDataDir: string | undefined;
+
+    beforeEach(() => {
+      tempDir = mkdtempSync(join(tmpdir(), 'digest-persist-'));
+      origDataDir = process.env.DATA_DIR;
+      process.env.DATA_DIR = tempDir;
+    });
+
+    afterEach(() => {
+      if (origDataDir === undefined) {
+        delete process.env.DATA_DIR;
+      } else {
+        process.env.DATA_DIR = origDataDir;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('persists buffers to disk and restores on start()', async () => {
+      vi.useFakeTimers();
+      try {
+        const sendToAgent1 = vi.fn().mockResolvedValue('ok');
+        const svc1 = new DigestService(sendToAgent1);
+        svc1.start();
+
+        svc1.addMessage(makeMessage({ userId: 'u1', userName: 'Alice' }), DEFAULT_DIGEST_CONFIG);
+        svc1.addMessage(makeMessage({ userId: 'u2', userName: 'Bob' }), DEFAULT_DIGEST_CONFIG);
+
+        // Force the debounced save by stopping (which saves synchronously)
+        svc1.stop();
+
+        // Verify file was written
+        const persistPath = join(tempDir, 'digest-buffers.json');
+        expect(existsSync(persistPath)).toBe(true);
+
+        const saved = JSON.parse(readFileSync(persistPath, 'utf-8'));
+        expect(saved.version).toBe(1);
+        expect(saved.buffers['discord:123456']).toBeDefined();
+        expect(saved.buffers['discord:123456'].messages).toHaveLength(2);
+
+        // Create a new service and start it — should restore
+        const sendToAgent2 = vi.fn().mockResolvedValue('ok');
+        const svc2 = new DigestService(sendToAgent2);
+        svc2.start();
+
+        const restored = svc2.getBuffer('discord:123456');
+        expect(restored).toBeDefined();
+        expect(restored!.messages).toHaveLength(2);
+        expect(restored!.messages[0].userName).toBe('Alice');
+        expect(restored!.messages[1].userName).toBe('Bob');
+        expect(svc2.hasTimer('discord:123456')).toBe(true);
+
+        // Persist file is cleaned up after load
+        expect(existsSync(persistPath)).toBe(false);
+
+        svc2.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('restored buffer flushes after remaining interval time', async () => {
+      vi.useFakeTimers();
+      try {
+        const sendToAgent1 = vi.fn().mockResolvedValue('ok');
+        const svc1 = new DigestService(sendToAgent1);
+        svc1.start();
+
+        svc1.addMessage(makeMessage(), DEFAULT_DIGEST_CONFIG);
+
+        // Simulate 20 minutes passing before restart
+        await vi.advanceTimersByTimeAsync(20 * 60_000);
+        expect(sendToAgent1).not.toHaveBeenCalled();
+
+        svc1.stop();
+
+        // New service — should schedule flush for remaining ~10 min
+        const sendToAgent2 = vi.fn().mockResolvedValue('ok');
+        const svc2 = new DigestService(sendToAgent2);
+        svc2.start();
+
+        // Advance 10 minutes — should trigger flush
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+        expect(sendToAgent2).toHaveBeenCalledTimes(1);
+        svc2.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not persist empty buffers', () => {
+      vi.useFakeTimers();
+      try {
+        const svc = new DigestService(vi.fn().mockResolvedValue('ok'));
+        svc.start();
+        // No messages added
+        svc.stop();
+
+        const persistPath = join(tempDir, 'digest-buffers.json');
+        expect(existsSync(persistPath)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // 23. onTimerFire error is caught by scheduleFlush catch handler
   // -----------------------------------------------------------------------
   it('timer-triggered flush errors are caught gracefully', async () => {
     vi.useFakeTimers();
