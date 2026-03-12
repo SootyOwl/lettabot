@@ -287,3 +287,54 @@ You can also use \`lettabot-react\` to add emoji reactions:
 
 The system will tell you if you're in "silent mode" where the CLI is required.
 `.trim();
+
+/**
+ * Digest mode prompt - periodic channel activity summary (silent mode)
+ */
+export function buildDigestPrompt(params: {
+  channel: string;
+  channelName?: string;
+  chatId: string;
+  intervalMin: number;
+  users: Array<{ name: string; count: number }>;
+  time: Date;
+}): string {
+  const { channel, channelName, chatId, intervalMin, users, time } = params;
+
+  const channelLabel = channelName
+    ? `${channel} #${channelName} (chat ID: ${chatId})`
+    : `${channel}:${chatId}`;
+
+  const timeStr = time.toLocaleString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  });
+
+  const activityLines = users
+    .map((u) => `${u.name}: ${u.count} message${u.count === 1 ? '' : 's'}`)
+    .join('\n');
+
+  return `
+${SILENT_MODE_PREFIX}
+
+TRIGGER: Channel activity digest
+CHANNEL: ${channelLabel}
+PERIOD: last ${intervalMin} minutes
+TIME: ${timeStr}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+YOUR TEXT OUTPUT IS PRIVATE - only you can see it.
+To respond in this channel, use:
+  lettabot-message send --channel ${channel} --chat ${chatId} --text "Your message"
+To read the conversation, use:
+  read_channel_messages --channel ${channel} --chat ${chatId} --limit 20
+
+ACTIVITY:
+${activityLines}
+`.trim();
+}
