@@ -331,8 +331,7 @@ TIME: ${timeStr}
 YOUR TEXT OUTPUT IS PRIVATE - only you can see it.
 To respond in this channel, use:
   lettabot-message send --channel ${channel} --chat ${chatId} --text "Your message"
-To read the conversation, use:
-  read_channel_messages --channel ${channel} --chat ${chatId} --limit 20
+To read the conversation, use the read_channel_messages tool (channel="${channel}", chat="${chatId}").
 
 ACTIVITY:
 ${activityLines}

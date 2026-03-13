@@ -74,6 +74,6 @@ describe('buildDigestPrompt', () => {
       users: [{ name: 'Alice', count: 1 }],
       time: new Date(),
     });
-    expect(prompt).toContain('read_channel_messages --channel discord --chat 123456');
+    expect(prompt).toContain('read_channel_messages tool (channel="discord", chat="123456")');
   });
 });
