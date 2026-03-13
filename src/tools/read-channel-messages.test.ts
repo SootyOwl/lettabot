@@ -90,7 +90,7 @@ describe('read_channel_messages tool', () => {
     expect(parsed.chatId).toBe('123');
     expect(parsed.messages).toContain('Alice: Hello');
     expect(parsed.messages).toContain('Bob: Hi there');
-    expect(parsed.messages).toContain('[Attachments: image.png]');
+    expect(parsed.messages).toContain('[Attachment: image.png http://example.com/img.png]');
   });
 
   it('respects limit parameter (clamped to 1-50)', async () => {
@@ -219,7 +219,7 @@ describe('read_channel_messages tool', () => {
     const parsed = parseToolResult(result);
 
     expect(parsed.ok).toBe(true);
-    expect(parsed.messages).toContain('[Attachments: attachment]');
+    expect(parsed.messages).toContain('[Attachment: attachment http://example.com/file]');
   });
 
   it('handles non-object args gracefully', async () => {

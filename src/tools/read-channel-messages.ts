@@ -1,10 +1,10 @@
-import type { AnyAgentTool, AgentToolResult, AgentToolResultContent } from '@letta-ai/letta-code-sdk';
+import type { AnyAgentTool, AgentToolResultContent } from '@letta-ai/letta-code-sdk';
 import {
   jsonResult,
   readStringParam,
 } from '@letta-ai/letta-code-sdk';
 import type { ChannelAdapter } from '../channels/types.js';
-import type { ChannelId, InboundMessage, InboundAttachment } from '../core/types.js';
+import type { InboundMessage, InboundAttachment } from '../core/types.js';
 import { resolveGroupMode, type GroupsConfig } from '../channels/group-mode.js';
 import { createLogger } from '../logger.js';
 
@@ -19,12 +19,17 @@ function isImageAttachment(a: InboundAttachment): boolean {
 async function fetchImageAsBase64(url: string): Promise<{ data: string; mimeType: string } | null> {
   try {
     const response = await fetch(url);
-    if (!response.ok) return null;
+    if (!response.ok) {
+      log.warn(`Failed to fetch image (${response.status}): ${url}`);
+      return null;
+    }
     const buffer = await response.arrayBuffer();
     const data = Buffer.from(buffer).toString('base64');
     const mimeType = response.headers.get('content-type') || 'image/png';
+    log.info(`Fetched image: ${url} (${Math.round(buffer.byteLength / 1024)}KB, ${mimeType})`);
     return { data, mimeType };
-  } catch {
+  } catch (err) {
+    log.warn(`Failed to fetch image: ${url}`, err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -38,8 +43,10 @@ function formatMessage(msg: InboundMessage): string {
   const name = msg.userName || msg.userId;
   let line = `[${time}] ${name}: ${msg.text}`;
   if (msg.attachments && msg.attachments.length > 0) {
-    const names = msg.attachments.map((a) => a.name || 'attachment').join(', ');
-    line += ` [Attachments: ${names}]`;
+    for (const a of msg.attachments) {
+      const label = a.name || 'attachment';
+      line += a.url ? ` [Attachment: ${label} ${a.url}]` : ` [Attachment: ${label}]`;
+    }
   }
   return line;
 }
@@ -141,6 +148,7 @@ export function createReadChannelMessagesTool(
         }
 
         // Fetch all images in parallel
+        log.info(`Found ${imageSlots.length} image attachment(s) to fetch`);
         const fetched = await Promise.all(
           imageSlots.map(async (slot) => {
             const img = await fetchImageAsBase64(slot.url);
